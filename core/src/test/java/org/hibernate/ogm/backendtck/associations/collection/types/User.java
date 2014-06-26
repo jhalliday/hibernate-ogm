@@ -6,59 +6,24 @@
  */
 package org.hibernate.ogm.backendtck.associations.collection.types;
 
-import java.util.HashMap;
-import java.util.HashSet;
+
 import java.util.Map;
 import java.util.Set;
-import javax.persistence.ElementCollection;
-import javax.persistence.Entity;
-import javax.persistence.GeneratedValue;
-import javax.persistence.Id;
-import javax.persistence.JoinColumn;
-import javax.persistence.JoinTable;
-import javax.persistence.MapKeyColumn;
-import javax.persistence.OneToMany;
-
-import org.hibernate.annotations.GenericGenerator;
 
 /**
  * @author Emmanuel Bernard <emmanuel@hibernate.org>
  */
-@Entity
-public class User {
-	private String id;
-	private Map<String, Address> addresses = new HashMap<String, Address>();
-	private Set<String> nicknames = new HashSet<String>();
+public interface User {
 
-	@Id
-	@GeneratedValue(generator = "uuid")
-	@GenericGenerator(name = "uuid", strategy = "uuid2")
-	public String getId() {
-		return id;
-	}
+	String getId();
 
-	public void setId(String id) {
-		this.id = id;
-	}
+	void setId(String id);
 
-	@OneToMany
-	@JoinTable(name = "User_Address")
-	@MapKeyColumn(name = "nick")
-	public Map<String, Address> getAddresses() {
-		return addresses;
-	}
+	Map<String, Address> getAddresses();
 
-	public void setAddresses(Map<String, Address> addresses) {
-		this.addresses = addresses;
-	}
+	void setAddresses(Map<String, Address> addresses);
 
-	@ElementCollection
-	@JoinTable(name = "Nicks", joinColumns = @JoinColumn(name = "user_id"))
-	public Set<String> getNicknames() {
-		return nicknames;
-	}
+	Set<String> getNicknames();
 
-	public void setNicknames(Set<String> nicknames) {
-		this.nicknames = nicknames;
-	}
+	void setNicknames(Set<String> nicknames);
 }

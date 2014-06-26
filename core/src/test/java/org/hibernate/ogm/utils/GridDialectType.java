@@ -30,7 +30,9 @@ public enum GridDialectType {
 
 	NEO4J( "org.hibernate.ogm.datastore.neo4j.utils.Neo4jTestHelper", false ),
 
-	COUCHDB( "org.hibernate.ogm.datastore.couchdb.utils.CouchDBTestHelper", true );
+	COUCHDB( "org.hibernate.ogm.datastore.couchdb.utils.CouchDBTestHelper", true ),
+
+	CASSANDRA( "org.hibernate.ogm.datastore.cassandra.utils.CassandraTestHelper", false );
 
 	private final String testHelperClassName;
 	private final boolean isDocumentStore;

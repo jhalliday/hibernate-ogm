@@ -27,6 +27,7 @@
         <module>neo4j</module>
         <module>couchdb</module>
         <module>modules</module>
+        <module>cassandra</module>
     </modules>
 
     <prerequisites>
@@ -134,7 +135,7 @@
         <resteasyVersion>3.0.6.Final</resteasyVersion>
         <jacksonVersion>1.9.13</jacksonVersion>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <!-- 
+        <!--
              Following is the default jgroups mcast address.  If you find the testsuite runs very slowly, there
              may be problems with multicast on the interface JGroups uses by default on your machine. You can
              try to resolve setting 'jgroups.bind_addr' as a system-property to the jvm launching maven and
@@ -267,6 +268,11 @@
             <dependency>
                 <groupId>${project.groupId}</groupId>
                 <artifactId>hibernate-ogm-couchdb</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>hibernate-ogm-cassandra</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
@@ -880,25 +886,25 @@
                     <artifactId>maven-jdocbook-style-plugin</artifactId>
                     <version>2.0.0</version>
                 </plugin>
-                <plugin>
-                    <artifactId>maven-assembly-plugin</artifactId>
-                    <version>2.4</version>
-                    <configuration>
-                        <descriptors>
-                            <descriptor>${basedir}/src/main/assembly/dist.xml</descriptor>
-                        </descriptors>
-                        <finalName>${assembly.name}</finalName>
-                    </configuration>
-                    <executions>
-                        <execution>
-                            <id>make-assembly</id>
-                            <phase>package</phase>
-                            <goals>
-                                <goal>single</goal>
-                            </goals>
-                        </execution>
-                    </executions>
-                </plugin>
+                <!--<plugin>-->
+                    <!--<artifactId>maven-assembly-plugin</artifactId>-->
+                    <!--<version>2.4</version>-->
+                    <!--<configuration>-->
+                        <!--<descriptors>-->
+                            <!--<descriptor>${basedir}/src/main/assembly/dist.xml</descriptor>-->
+                        <!--</descriptors>-->
+                        <!--<finalName>${assembly.name}</finalName>-->
+                    <!--</configuration>-->
+                    <!--<executions>-->
+                        <!--<execution>-->
+                            <!--<id>make-assembly</id>-->
+                            <!--<phase>package</phase>-->
+                            <!--<goals>-->
+                                <!--<goal>single</goal>-->
+                            <!--</goals>-->
+                        <!--</execution>-->
+                    <!--</executions>-->
+                <!--</plugin>-->
                 <plugin>
                     <artifactId>maven-release-plugin</artifactId>
                     <version>2.5</version>
@@ -1116,4 +1122,3 @@
         </profile>
     </profiles>
 </project>
-

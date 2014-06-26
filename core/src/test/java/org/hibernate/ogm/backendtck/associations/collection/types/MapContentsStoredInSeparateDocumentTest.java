@@ -28,7 +28,7 @@ import org.junit.Test;
  * @author Gunnar Morling
  */
 @SkipByGridDialect(
-		value = { GridDialectType.EHCACHE, GridDialectType.HASHMAP, GridDialectType.INFINISPAN, GridDialectType.NEO4J },
+		value = { GridDialectType.EHCACHE, GridDialectType.HASHMAP, GridDialectType.INFINISPAN, GridDialectType.NEO4J, GridDialectType.CASSANDRA },
 		comment = "Only the document stores CouchDB and MongoDB support the configuration of specific association storage strategies"
 )
 public class MapContentsStoredInSeparateDocumentTest extends OgmTestCase {
@@ -41,7 +41,7 @@ public class MapContentsStoredInSeparateDocumentTest extends OgmTestCase {
 		home.setCity( "Paris" );
 		Address work = new Address();
 		work.setCity( "San Francisco" );
-		User user = new User();
+		User user = new UserWithNullableCollection();
 		user.getAddresses().put( "home", home );
 		user.getAddresses().put( "work", work );
 		user.getNicknames().add( "idrA" );
@@ -49,7 +49,7 @@ public class MapContentsStoredInSeparateDocumentTest extends OgmTestCase {
 		session.persist( home );
 		session.persist( work );
 		session.persist( user );
-		User user2 = new User();
+		User user2 = new UserWithNullableCollection();
 		user2.getNicknames().add( "idrA" );
 		user2.getNicknames().add( "day[9]" );
 		session.persist( user2 );
@@ -68,7 +68,7 @@ public class MapContentsStoredInSeparateDocumentTest extends OgmTestCase {
 				.isEqualTo( 2 );
 
 		tx = session.beginTransaction();
-		user = (User) session.get( User.class, user.getId() );
+		user = (User) session.get( UserWithNullableCollection.class, user.getId() );
 		assertThat( user.getNicknames() ).as( "Should have 2 nick1" ).hasSize( 2 );
 		assertThat( user.getNicknames() ).as( "Should contain nicks" ).contains( "idrA", "day[9]" );
 		user.getNicknames().remove( "idrA" );
@@ -77,7 +77,7 @@ public class MapContentsStoredInSeparateDocumentTest extends OgmTestCase {
 		session.clear();
 
 		tx = session.beginTransaction();
-		user = (User) session.get( User.class, user.getId() );
+		user = (User) session.get( UserWithNullableCollection.class, user.getId() );
 		// TODO do null value
 		assertThat( user.getAddresses() ).as( "List should have 2 elements" ).hasSize( 2 );
 		assertThat( user.getAddresses().get( "home" ).getCity() ).as( "home address should be under home" ).isEqualTo(
@@ -88,7 +88,7 @@ public class MapContentsStoredInSeparateDocumentTest extends OgmTestCase {
 		session.delete( session.load( Address.class, home.getId() ) );
 		session.delete( session.load( Address.class, work.getId() ) );
 
-		user2 = (User) session.get( User.class, user2.getId() );
+		user2 = (User) session.get( UserWithNullableCollection.class, user2.getId() );
 		assertThat( user2.getNicknames() ).as( "Should have 2 nicks" ).hasSize( 2 );
 		assertThat( user2.getNicknames() ).as( "Should contain nick" ).contains( "idrA", "day[9]" );
 		session.delete( user2 );
@@ -102,7 +102,7 @@ public class MapContentsStoredInSeparateDocumentTest extends OgmTestCase {
 
 	@Override
 	protected Class<?>[] getAnnotatedClasses() {
-		return new Class<?>[] { User.class, Address.class };
+		return new Class<?>[] { UserWithNullableCollection.class, Address.class };
 	}
 
 	@Override
