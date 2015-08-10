@@ -9,13 +9,14 @@ package org.hibernate.ogm.datastore.cassandra.impl;
 import org.hibernate.ogm.datastore.cassandra.type.impl.CassandraCalendarDateType;
 import org.hibernate.ogm.datastore.cassandra.type.impl.CassandraCalendarType;
 import org.hibernate.ogm.datastore.cassandra.type.impl.CassandraCharacterType;
+import org.hibernate.ogm.datastore.cassandra.type.impl.CassandraDateType;
 import org.hibernate.ogm.datastore.cassandra.type.impl.CassandraPrimitiveByteArrayType;
+import org.hibernate.ogm.datastore.cassandra.type.impl.CassandraTimeType;
 import org.hibernate.ogm.datastore.cassandra.type.impl.CassandraTrueFalseType;
 import org.hibernate.ogm.datastore.cassandra.type.impl.CassandraYesNoType;
 import org.hibernate.ogm.type.impl.BooleanType;
 import org.hibernate.ogm.type.impl.ByteType;
 import org.hibernate.ogm.type.impl.ClassType;
-import org.hibernate.ogm.type.impl.DateType;
 import org.hibernate.ogm.type.impl.DoubleType;
 import org.hibernate.ogm.type.impl.EnumType;
 import org.hibernate.ogm.type.impl.FloatType;
@@ -24,7 +25,6 @@ import org.hibernate.ogm.type.impl.LongType;
 import org.hibernate.ogm.type.impl.NumericBooleanType;
 import org.hibernate.ogm.type.impl.ShortType;
 import org.hibernate.ogm.type.impl.StringType;
-import org.hibernate.ogm.type.impl.TimeType;
 import org.hibernate.ogm.type.impl.TimestampType;
 import org.hibernate.ogm.type.impl.UrlType;
 
@@ -59,12 +59,12 @@ public enum CassandraTypeMapper {
 		mapper.put( StringType.INSTANCE, "text" );
 		mapper.put( UrlType.INSTANCE, "text" );
 		mapper.put( BooleanType.INSTANCE, "boolean" );
-		mapper.put( DateType.INSTANCE, "timestamp" );
 		mapper.put( TimestampType.INSTANCE, "timestamp" );
-		mapper.put( TimeType.INSTANCE, "timestamp" );
 		mapper.put( ByteType.INSTANCE, "tinyint" );
 		mapper.put( ShortType.INSTANCE, "smallint" );
 
+		mapper.put( CassandraDateType.INSTANCE, "date" );
+		mapper.put( CassandraTimeType.INSTANCE, "time" );
 		mapper.put( CassandraCharacterType.INSTANCE, "text" );
 		mapper.put( CassandraCalendarDateType.INSTANCE, "timestamp" );
 		mapper.put( CassandraCalendarType.INSTANCE, "timestamp" );
@@ -121,6 +121,14 @@ public enum CassandraTypeMapper {
 
 		if ( type == TrueFalseType.INSTANCE ) {
 			return CassandraTrueFalseType.INSTANCE;
+		}
+
+		if ( type == StandardBasicTypes.DATE ) {
+			return CassandraDateType.INSTANCE;
+		}
+
+		if ( type == StandardBasicTypes.TIME ) {
+			return CassandraTimeType.INSTANCE;
 		}
 
 		return null;
