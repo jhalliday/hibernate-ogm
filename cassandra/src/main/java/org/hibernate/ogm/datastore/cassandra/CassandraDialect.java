@@ -19,6 +19,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 
 import org.hibernate.HibernateException;
 import org.hibernate.LockMode;
@@ -66,6 +67,9 @@ import com.datastax.driver.core.querybuilder.Delete;
 import com.datastax.driver.core.querybuilder.Insert;
 import com.datastax.driver.core.querybuilder.QueryBuilder;
 import com.datastax.driver.core.querybuilder.Select;
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 
 /**
  * Dialect implementation using CQL3 over Cassandra's native transport via java-driver.
@@ -79,6 +83,7 @@ public class CassandraDialect implements GridDialect {
 	private final CassandraDatastoreProvider provider;
 	private final Session session;
 	private final ProtocolVersion protocolVersion;
+	private final LoadingCache<String, PreparedStatement> preparedStatementCache;
 
 	public CassandraDialect(CassandraDatastoreProvider provider) {
 		this.provider = provider;
@@ -88,6 +93,17 @@ public class CassandraDialect implements GridDialect {
 				.getConfiguration()
 				.getProtocolOptions()
 				.getProtocolVersionEnum();
+
+		preparedStatementCache = CacheBuilder.newBuilder()
+			.maximumSize( 100000 )
+			.build(
+				new CacheLoader<String, PreparedStatement>() {
+					@Override
+					public PreparedStatement load(String query) throws Exception {
+						return session.prepare( query );
+					}
+				}
+		);
 	}
 
 	@Override
@@ -99,8 +115,15 @@ public class CassandraDialect implements GridDialect {
 
 	private ResultSet bindAndExecute(Object[] columnValues, RegularStatement statement) {
 
+		PreparedStatement preparedStatement;
 		try {
-			PreparedStatement preparedStatement = session.prepare( statement );
+			preparedStatement = preparedStatementCache.get( statement.getQueryString() );  session.prepare( statement );
+		} catch(ExecutionException e) {
+			log.failToPrepareCQL( statement.getQueryString(), e.getCause() );
+			throw new RuntimeException( e.getCause() );
+		}
+
+		try {
 			BoundStatement boundStatement = new BoundStatement( preparedStatement );
 			for ( int i = 0; i < columnValues.length; i++ ) {
 				DataType dataType = preparedStatement.getVariables().getType( i );
