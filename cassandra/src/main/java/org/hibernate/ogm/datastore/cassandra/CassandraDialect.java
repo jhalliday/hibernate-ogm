@@ -23,6 +23,7 @@ import java.util.Set;
 import org.hibernate.HibernateException;
 import org.hibernate.LockMode;
 import org.hibernate.dialect.lock.LockingStrategy;
+import org.hibernate.engine.spi.QueryParameters;
 import org.hibernate.mapping.Column;
 import org.hibernate.mapping.Table;
 import org.hibernate.ogm.datastore.cassandra.impl.CassandraDatastoreProvider;
@@ -30,8 +31,14 @@ import org.hibernate.ogm.datastore.cassandra.impl.CassandraTypeMapper;
 import org.hibernate.ogm.datastore.cassandra.logging.impl.Log;
 import org.hibernate.ogm.datastore.cassandra.logging.impl.LoggerFactory;
 import org.hibernate.ogm.datastore.cassandra.model.impl.ResultSetAssociationSnapshot;
+import org.hibernate.ogm.datastore.cassandra.model.impl.ResultSetTupleIterator;
 import org.hibernate.ogm.datastore.cassandra.model.impl.ResultSetTupleSnapshot;
+import org.hibernate.ogm.datastore.cassandra.query.impl.CassandraParameterMetadataBuilder;
 import org.hibernate.ogm.datastore.map.impl.MapTupleSnapshot;
+import org.hibernate.ogm.dialect.query.spi.BackendQuery;
+import org.hibernate.ogm.dialect.query.spi.ClosableIterator;
+import org.hibernate.ogm.dialect.query.spi.ParameterMetadataBuilder;
+import org.hibernate.ogm.dialect.query.spi.QueryableGridDialect;
 import org.hibernate.ogm.dialect.spi.AssociationContext;
 import org.hibernate.ogm.dialect.spi.AssociationTypeContext;
 import org.hibernate.ogm.dialect.spi.DuplicateInsertPreventionStrategy;
@@ -61,6 +68,7 @@ import com.datastax.driver.core.RegularStatement;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Session;
+import com.datastax.driver.core.SimpleStatement;
 import com.datastax.driver.core.exceptions.DriverException;
 import com.datastax.driver.core.querybuilder.Delete;
 import com.datastax.driver.core.querybuilder.Insert;
@@ -72,7 +80,7 @@ import com.datastax.driver.core.querybuilder.Select;
  *
  * @author Jonathan Halliday
  */
-public class CassandraDialect implements GridDialect {
+public class CassandraDialect implements GridDialect, QueryableGridDialect<String> {
 
 	private static final Log log = LoggerFactory.getLogger();
 
@@ -449,5 +457,36 @@ public class CassandraDialect implements GridDialect {
 	@Override
 	public DuplicateInsertPreventionStrategy getDuplicateInsertPreventionStrategy(EntityKeyMetadata entityKeyMetadata) {
 		return null;
+	}
+
+	@Override
+	public ClosableIterator<Tuple> executeBackendQuery(
+			BackendQuery<String> query, QueryParameters queryParameters) {
+
+		ResultSet resultSet = bindAndExecute( queryParameters.getPositionalParameterValues(), new SimpleStatement( query.getQuery() ) );
+
+		int first = 0;
+		if ( queryParameters.getRowSelection().getFirstRow() != null ) {
+			first = queryParameters.getRowSelection().getFirstRow();
+		}
+
+		int max = Integer.MAX_VALUE;
+		if ( queryParameters.getRowSelection().getMaxRows() != null ) {
+			max = queryParameters.getRowSelection().getMaxRows();
+		}
+
+		return new ResultSetTupleIterator( resultSet, protocolVersion, first, max );
+	}
+
+	@Override
+	public ParameterMetadataBuilder getParameterMetadataBuilder() {
+		return new CassandraParameterMetadataBuilder( session, provider.getMetaDataCache() );
+	}
+
+	@Override
+	public String parseNativeQuery(String nativeQuery) {
+		// we defer the work, since at this point the table may not yet exist in the db and without
+		// the db server supplied metadata or parsing assistance we can't do much meaningful validation.
+		return nativeQuery;
 	}
 }
