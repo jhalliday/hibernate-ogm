@@ -6,10 +6,12 @@
  */
 package org.hibernate.ogm.datastore.cassandra;
 
+import static com.datastax.driver.core.querybuilder.QueryBuilder.appendAll;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.delete;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.eq;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.insertInto;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.select;
+import static com.datastax.driver.core.querybuilder.QueryBuilder.update;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -68,6 +70,7 @@ import com.datastax.driver.core.querybuilder.Delete;
 import com.datastax.driver.core.querybuilder.Insert;
 import com.datastax.driver.core.querybuilder.QueryBuilder;
 import com.datastax.driver.core.querybuilder.Select;
+import com.datastax.driver.core.querybuilder.Update;
 
 /**
  * Dialect implementation using CQL3 over Cassandra's native transport via java-driver.
@@ -235,12 +238,43 @@ public class CassandraDialect implements GridDialect {
 
 	@Override
 	public Association getAssociation(AssociationKey key, AssociationContext associationContext) {
-		Table tableMetadata = provider.getMetaDataCache().get( key.getTable() );
-		@SuppressWarnings("unchecked")
-		List<Column> tablePKCols = tableMetadata.getPrimaryKey().getColumns();
 
-		Select select = select().all().from( quote( key.getTable() ) );
-		Select.Where selectWhere = select.where( eq( quote( key.getColumnNames()[0] ), QueryBuilder.bindMarker() ) );
+		Select select;
+		List<Column> tablePKCols;
+
+		Table actualTableMetadata = provider.getInlinedCollections().get( key.getTable() );
+		Table assumedTableMetadata = provider.getMetaDataCache().get( key.getTable() );
+
+		if ( actualTableMetadata != null) {
+
+			// the association would normally be in its own table (assumedTable), but we've inlined it as a
+			// native collection column on the parent table (actualTable), so we must rewrite the query accordingly
+
+			Select.Selection selection = select()
+					.column( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) )
+					.as( quote( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) ) );
+
+			tablePKCols = actualTableMetadata.getPrimaryKey().getColumns();
+
+			for ( int i = 0; i < key.getColumnNames().length; i++ ) {
+				selection = selection
+						.column( quote( tablePKCols.get( i ).getName() ) )
+						.as( quote( actualTableMetadata.getName() + "_" + tablePKCols.get( i ).getName() ) );
+			}
+
+			select = selection.from( quote( actualTableMetadata.getName() ) );
+
+		} else {
+
+			select =  select().all().from( quote( assumedTableMetadata.getName() ) );
+
+			tablePKCols = assumedTableMetadata.getPrimaryKey().getColumns();
+		}
+
+		Select.Where selectWhere = select.where( eq(
+														 quote( key.getColumnNames()[0] ),
+														 QueryBuilder.bindMarker()
+												 ) );
 		for ( int i = 1; i < key.getColumnNames().length; i++ ) {
 			selectWhere = selectWhere.and( eq( quote( key.getColumnNames()[i] ), QueryBuilder.bindMarker() ) );
 		}
@@ -276,7 +310,7 @@ public class CassandraDialect implements GridDialect {
 
 		List<String> combinedKeys = new LinkedList<String>();
 		combinedKeys.addAll( Arrays.asList( key.getColumnNames() ) );
-		for ( Object column : tableMetadata.getPrimaryKey().getColumns() ) {
+		for ( Object column : assumedTableMetadata.getPrimaryKey().getColumns() ) {
 			String name = ((Column) column).getName();
 			if ( !combinedKeys.contains( name ) ) {
 				combinedKeys.add( name );
@@ -300,9 +334,106 @@ public class CassandraDialect implements GridDialect {
 		return association;
 	}
 
+
 	@Override
 	public Association createAssociation(AssociationKey key, AssociationContext associationContext) {
 		return new Association( new MapAssociationSnapshot( new HashMap<RowKey, Map<String, Object>>() ) );
+	}
+
+	public void insertOrUpdateInlinedAssociation(
+			AssociationKey key,
+			Association association,
+			AssociationContext associationContext,
+			Table actualTableMetadata,
+			Table assumedTableMetadata
+	) {
+
+		List<AssociationOperation> updateOps = new ArrayList<AssociationOperation>(
+				association.getOperations()
+						.size()
+		);
+		List<AssociationOperation> deleteOps = new ArrayList<AssociationOperation>(
+				association.getOperations()
+						.size()
+		);
+
+		for ( AssociationOperation op : association.getOperations() ) {
+			switch ( op.getType() ) {
+				case CLEAR:
+					break;
+				case PUT:
+					updateOps.add( op );
+					break;
+				case REMOVE:
+					deleteOps.add( op );
+					break;
+				default:
+					throw new HibernateException( "AssociationOperation not supported: " + op.getType() );
+			}
+		}
+
+		for ( AssociationOperation op : updateOps ) {
+
+			Tuple value = op.getValue();
+			List<Object> columnValues = new ArrayList<>();
+			Update.Assignments assignments = update( quote( actualTableMetadata.getName() ) )
+					.with();
+
+			List<Column> tablePKCols = actualTableMetadata.getPrimaryKey().getColumns();
+			Set<String> nonValueColumnNames = new HashSet<>();
+			for(Column column : tablePKCols) {
+				nonValueColumnNames.add( actualTableMetadata.getName() + "_"+column.getName() );
+			}
+
+			for ( String columnName : value.getColumnNames() ) {
+				if(!nonValueColumnNames.contains( columnName )) {
+					assignments = assignments.and( appendAll(
+														   quote( columnName ),
+														   QueryBuilder.bindMarker( columnName )
+												   ) );
+					columnValues.add( Arrays.asList( op.getValue().get( columnName ) ) );
+				}
+			}
+
+			Update.Where updateWhere = assignments.where(
+					eq(
+							quote( tablePKCols.get( 0 ).getName() ),
+							QueryBuilder.bindMarker()
+					)
+			);
+			columnValues.add( op.getValue().get( actualTableMetadata.getName() + "_"+tablePKCols.get( 0 ).getName() ) );
+			for ( int i = 1; i < key.getColumnNames().length; i++ ) {
+				updateWhere = updateWhere.and( eq( quote( tablePKCols.get( i ).getName() ), QueryBuilder.bindMarker() ) );
+				columnValues.add( op.getValue().get( actualTableMetadata.getName() + "_"+tablePKCols.get( i ).getName() ) );
+			}
+
+			System.out.println(updateOps.size());
+			bindAndExecute( columnValues.toArray(), updateWhere );
+		}
+
+		for ( AssociationOperation op : deleteOps ) {
+
+			System.out.println(deleteOps.size());
+
+//			RowKey value = op.getKey();
+//			Delete.Selection deleteSelection = delete();
+//			for ( String columnName : op.getKey().getColumnNames() ) {
+//				if ( !keyColumnNames.contains( columnName ) ) {
+//					deleteSelection.column( quote( columnName ) );
+//				}
+//			}
+//			Delete delete = deleteSelection.from( quote( key.getTable() ) );
+//			List<Object> columnValues = new LinkedList<>();
+//			for ( String columnName : value.getColumnNames() ) {
+//				if ( keyColumnNames.contains( columnName ) ) {
+//					delete.where( eq( quote( columnName ), QueryBuilder.bindMarker( columnName ) ) );
+//					columnValues.add( value.getColumnValue( columnName ) );
+//				}
+//			}
+//
+//			bindAndExecute( columnValues.toArray(), delete );
+		}
+
 	}
 
 	@Override
@@ -315,9 +446,18 @@ public class CassandraDialect implements GridDialect {
 			return;
 		}
 
-		Table tableMetadata = provider.getMetaDataCache().get( key.getTable() );
+		Table actualTableMetadata = provider.getInlinedCollections().get( key.getTable() );
+		Table assumedTableMetadata = provider.getMetaDataCache().get( key.getTable() );
+		if(actualTableMetadata != null) {
+			insertOrUpdateInlinedAssociation(key, association, associationContext,
+											 actualTableMetadata, assumedTableMetadata);
+			return;
+		}
+
+
+//		Table tableMetadata = provider.getMetaDataCache().get( key.getTable() );
 		Set<String> keyColumnNames = new HashSet<String>();
-		for ( Object columnObject : tableMetadata.getPrimaryKey().getColumns() ) {
+		for ( Object columnObject : assumedTableMetadata.getPrimaryKey().getColumns() ) {
 			Column column = (Column) columnObject;
 			keyColumnNames.add( column.getName() );
 		}

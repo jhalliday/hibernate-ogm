@@ -55,8 +55,15 @@ public class CassandraDatastoreProvider extends BaseDatastoreProvider
 	private final Map<String, Table> metaDataCache = new HashMap<String, Table>();
 	private final Map<String, Table> wrappedMetaDataCache = Collections.unmodifiableMap( metaDataCache );
 
+	private final Map<String,Table> inlinedCollections = new HashMap<>();
+	private final Map<String, Table> wrappedInlinedCollections = Collections.unmodifiableMap( inlinedCollections );
+
 	public void setTableMetadata(String name, Table table) {
 		metaDataCache.put( name, table );
+	}
+
+	public void setInlinedCollection(String name, Table table) {
+		inlinedCollections.put( name, table );
 	}
 
 	@Override
@@ -85,6 +92,10 @@ public class CassandraDatastoreProvider extends BaseDatastoreProvider
 
 	public Map<String, Table> getMetaDataCache() {
 		return wrappedMetaDataCache;
+	}
+
+	public Map<String, Table> getInlinedCollections() {
+		return wrappedInlinedCollections;
 	}
 
 	@Override
