@@ -236,41 +236,117 @@ public class CassandraDialect implements GridDialect {
 		bindAndExecute( key.getColumnValues(), delete );
 	}
 
+	public Association getInlinedAssociation(AssociationKey key, AssociationContext associationContext,
+											 Table actualTableMetadata, Table assumedTableMetadata) {
+
+		// the association would normally be in its own table (assumedTable), but we've inlined it as a
+		// native collection column on the parent table (actualTable), so we must rewrite the query accordingly
+
+		Select.Selection selection = select()
+				.column( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) )
+				.as( quote( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) ) );
+
+		List<Column> tablePKCols= actualTableMetadata.getPrimaryKey().getColumns();
+
+		for ( int i = 0; i < key.getColumnNames().length; i++ ) {
+			selection = selection
+					.column( quote( tablePKCols.get( i ).getName() ) )
+					.as( quote( actualTableMetadata.getName() + "_" + tablePKCols.get( i ).getName() ) );
+		}
+
+		Select select = selection.from( quote( actualTableMetadata.getName() ) );
+		Select.Where selectWhere = select.where(
+				eq(
+						quote( tablePKCols.get( 0 ).getName() ),
+						QueryBuilder.bindMarker()
+				)
+		);
+		for ( int i = 1; i < tablePKCols.size(); i++ ) {
+			selectWhere = selectWhere.and( eq( quote( tablePKCols.get( i ).getName() ), QueryBuilder.bindMarker() ) );
+		}
+
+
+
+
+		boolean requiredFiltering = false;
+		for ( Column column : tablePKCols ) {
+			String name = column.getName();
+			boolean foundColumn = false;
+			for ( int i = 0; i < key.getColumnNames().length; i++ ) {
+				if ( name.equals( key.getColumnNames()[i] ) ) {
+					foundColumn = true;
+					break;
+				}
+			}
+			if ( !foundColumn ) {
+				requiredFiltering = true;
+				break;
+			}
+		}
+
+		if ( requiredFiltering ) {
+			select.allowFiltering();
+		}
+
+		Object[] columnValues = key.getColumnValues();
+		ResultSet resultSet = bindAndExecute( columnValues, select );
+
+		if ( resultSet.isExhausted() ) {
+			return null;
+		}
+
+		Map<RowKey, Map<String, Object>> rowKeyMap = new HashMap<>();
+
+		List<String> rowKeyColumnNamesList = new LinkedList<>();
+		Iterator<Column> iter = assumedTableMetadata.getColumnIterator();
+		while(iter.hasNext()) {
+			rowKeyColumnNamesList.add( iter.next().getName() );
+		}
+		String[] columnNames = rowKeyColumnNamesList.toArray( new String[rowKeyColumnNamesList.size()] );
+		String collectionColumn = key.getTable().replace( actualTableMetadata.getName() + "_", "" );
+
+		for ( Row row : resultSet ) {
+
+			// TODO unroll collection
+			Map<String, Object> rowMap = tupleFromRow( row );
+			List<?> list = (List<?>) rowMap.get( collectionColumn );
+			if(list == null) {
+				continue;
+			}
+			for(Object o : list) {
+
+				Map<String, Object> unrolledMap = new HashMap<>();
+				unrolledMap.putAll( rowMap );
+				unrolledMap.put( collectionColumn, o );
+				Object[] resultColumnValues = new Object[columnNames.length];
+				for ( int i = 0; i < columnNames.length; i++ ) {
+					resultColumnValues[i] = unrolledMap.get( columnNames[i] );
+				}
+				RowKey rowKey = new RowKey( columnNames, resultColumnValues );
+				rowKeyMap.put( rowKey, unrolledMap );
+
+			}
+		}
+
+		Association association = new Association( new MapAssociationSnapshot( rowKeyMap ) );
+
+		return association;
+
+	}
+
 	@Override
 	public Association getAssociation(AssociationKey key, AssociationContext associationContext) {
-
-		Select select;
-		List<Column> tablePKCols;
 
 		Table actualTableMetadata = provider.getInlinedCollections().get( key.getTable() );
 		Table assumedTableMetadata = provider.getMetaDataCache().get( key.getTable() );
 
 		if ( actualTableMetadata != null) {
-
-			// the association would normally be in its own table (assumedTable), but we've inlined it as a
-			// native collection column on the parent table (actualTable), so we must rewrite the query accordingly
-
-			Select.Selection selection = select()
-					.column( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) )
-					.as( quote( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) ) );
-
-			tablePKCols = actualTableMetadata.getPrimaryKey().getColumns();
-
-			for ( int i = 0; i < key.getColumnNames().length; i++ ) {
-				selection = selection
-						.column( quote( tablePKCols.get( i ).getName() ) )
-						.as( quote( actualTableMetadata.getName() + "_" + tablePKCols.get( i ).getName() ) );
-			}
-
-			select = selection.from( quote( actualTableMetadata.getName() ) );
-
-		} else {
-
-			select =  select().all().from( quote( assumedTableMetadata.getName() ) );
-
-			tablePKCols = assumedTableMetadata.getPrimaryKey().getColumns();
+			return getInlinedAssociation( key, associationContext, actualTableMetadata, assumedTableMetadata );
 		}
 
+		List<Column> tablePKCols = assumedTableMetadata.getPrimaryKey().getColumns();
+
+		Select select =  select().all().from( quote( assumedTableMetadata.getName() ) );
 		Select.Where selectWhere = select.where( eq(
 														 quote( key.getColumnNames()[0] ),
 														 QueryBuilder.bindMarker()
@@ -454,8 +530,6 @@ public class CassandraDialect implements GridDialect {
 			return;
 		}
 
-
-//		Table tableMetadata = provider.getMetaDataCache().get( key.getTable() );
 		Set<String> keyColumnNames = new HashSet<String>();
 		for ( Object columnObject : assumedTableMetadata.getPrimaryKey().getColumns() ) {
 			Column column = (Column) columnObject;
@@ -520,15 +594,45 @@ public class CassandraDialect implements GridDialect {
 		}
 	}
 
+	public void removeInlinedAssociation(AssociationKey key, AssociationContext associationContext,
+								  Table actualTableMetadata, Table assumedTableMetadata) {
+		// TODO
+		Delete delete = delete()
+				.column( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) )
+				.from( quote( actualTableMetadata.getName() ) );
+
+		List<Column> tablePKCols = actualTableMetadata.getPrimaryKey().getColumns();
+
+		Delete.Where deleteWhere = delete.where(
+				eq(
+						quote( tablePKCols.get( 0 ).getName() ),
+						QueryBuilder.bindMarker()
+				)
+		);
+		for ( int i = 1; i < tablePKCols.size(); i++ ) {
+			deleteWhere = deleteWhere.and( eq( quote( tablePKCols.get( i ).getName() ), QueryBuilder.bindMarker() ) );
+		}
+
+		Object[] columnValues = key.getColumnValues();
+		ResultSet resultSet = bindAndExecute( columnValues, delete );
+	}
+
 	@Override
 	public void removeAssociation(AssociationKey key, AssociationContext associationContext) {
 		if ( key.getMetadata().isInverse() ) {
 			return;
 		}
 
-		Table tableMetadata = provider.getMetaDataCache().get( key.getTable() );
+		Table actualTableMetadata = provider.getInlinedCollections().get( key.getTable() );
+		Table assumedTableMetadata = provider.getMetaDataCache().get( key.getTable() );
+		if(actualTableMetadata != null) {
+			removeInlinedAssociation(key, associationContext,
+											 actualTableMetadata, assumedTableMetadata);
+			return;
+		}
+
 		Set<String> keyColumnNames = new HashSet<String>();
-		for ( Object columnObject : tableMetadata.getPrimaryKey().getColumns() ) {
+		for ( Object columnObject : assumedTableMetadata.getPrimaryKey().getColumns() ) {
 			Column column = (Column) columnObject;
 			keyColumnNames.add( column.getName() );
 		}
