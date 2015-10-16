@@ -31,8 +31,13 @@ import org.hibernate.service.spi.Startable;
 import org.hibernate.service.spi.Stoppable;
 
 import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.DataType;
 import com.datastax.driver.core.Session;
+import com.datastax.driver.core.UserType;
 import com.datastax.driver.core.exceptions.DriverException;
+import com.datastax.driver.core.schemabuilder.CreateType;
+import com.datastax.driver.core.schemabuilder.SchemaBuilder;
+import com.datastax.driver.core.schemabuilder.SchemaStatement;
 
 /**
  * Datastore service layered on Cassandra's java-driver i.e. CQL3 native transport.
@@ -55,14 +60,14 @@ public class CassandraDatastoreProvider extends BaseDatastoreProvider
 	private final Map<String, Table> metaDataCache = new HashMap<String, Table>();
 	private final Map<String, Table> wrappedMetaDataCache = Collections.unmodifiableMap( metaDataCache );
 
-	private final Map<String,Table> inlinedCollections = new HashMap<>();
-	private final Map<String, Table> wrappedInlinedCollections = Collections.unmodifiableMap( inlinedCollections );
+	private final Map<String, InlinedTable> inlinedCollections = new HashMap<>();
+	private final Map<String, InlinedTable> wrappedInlinedCollections = Collections.unmodifiableMap( inlinedCollections );
 
 	public void setTableMetadata(String name, Table table) {
 		metaDataCache.put( name, table );
 	}
 
-	public void setInlinedCollection(String name, Table table) {
+	public void setInlinedCollection(String name, InlinedTable table) {
 		inlinedCollections.put( name, table );
 	}
 
@@ -94,7 +99,7 @@ public class CassandraDatastoreProvider extends BaseDatastoreProvider
 		return wrappedMetaDataCache;
 	}
 
-	public Map<String, Table> getInlinedCollections() {
+	public Map<String, InlinedTable> getInlinedCollections() {
 		return wrappedInlinedCollections;
 	}
 
@@ -227,6 +232,25 @@ public class CassandraDatastoreProvider extends BaseDatastoreProvider
 		catch (DriverException e) {
 			log.failedToCreateTable( entityName, e );
 		}
+	}
+
+	public UserType createUDTIfNeeded(String udtName, List<String> columnName, List<String> columnTypes) {
+
+		CreateType typeBuilder = SchemaBuilder.createType( CassandraDialect.quote( udtName ) ).ifNotExists();
+		for(int i = 0; i < columnName.size(); i++) {
+			DataType dataType = CassandraTypeMapper.INSTANCE.getTypeForName( columnTypes.get( i ).toLowerCase() );
+			typeBuilder = typeBuilder.addColumn( CassandraDialect.quote( columnName.get( i ) ), dataType );
+		}
+
+		UserType userType = null;
+		try {
+			session.execute( typeBuilder.build() );
+			userType = cluster.getMetadata().getKeyspace( session.getLoggedKeyspace() ).getUserType( CassandraDialect.quote( udtName ) );
+		}
+		catch (DriverException e) {
+			log.failedToCreateTable( typeBuilder.build(), e );
+		}
+		return userType;
 	}
 
 	@Override

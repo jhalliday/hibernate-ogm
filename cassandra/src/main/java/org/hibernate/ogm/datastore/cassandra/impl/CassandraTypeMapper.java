@@ -37,6 +37,8 @@ import org.hibernate.type.YesNoType;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.datastax.driver.core.DataType;
+
 /**
  * Assist the SchemaDefiner by supplying mapping from GridType to CQL3 column type.
  * see also http://www.datastax.com/documentation/cql/3.1/cql/cql_reference/cql_data_types_c.html
@@ -69,6 +71,18 @@ public enum CassandraTypeMapper {
 		mapper.put( CassandraCalendarDateType.INSTANCE, "timestamp" );
 		mapper.put( CassandraCalendarType.INSTANCE, "timestamp" );
 		mapper.put( CassandraPrimitiveByteArrayType.INSTANCE, "blob" );
+	}
+
+	private Map<String,DataType> namesToTypes = new HashMap<>();
+
+	CassandraTypeMapper() {
+		for(DataType dataType : DataType.allPrimitiveTypes()) {
+			namesToTypes.put( dataType.getName().toString().toLowerCase(), dataType );
+		}
+	}
+
+	public DataType getTypeForName(String name) {
+		return namesToTypes.get( name );
 	}
 
 	public String hibernateToCQL(GridType gridType) {

@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import com.datastax.driver.core.UserType;
+
 import org.hibernate.boot.model.relational.Namespace;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.mapping.Column;
@@ -145,7 +147,7 @@ public class CassandraSchemaDefiner extends BaseSchemaDefiner {
 		if(childTables != null) {
 			for(Table childTable : childTables) {
 
-				datastoreProvider.setInlinedCollection( childTable.getName(), table );
+				InlinedTable inlinedTable = null;
 
 				List<Column> interestingColumns = new LinkedList<>();
 				Iterator<Column> childColumnIterator = childTable.getColumnIterator();
@@ -159,6 +161,7 @@ public class CassandraSchemaDefiner extends BaseSchemaDefiner {
 						interestingColumns.removeAll( foreignKey.getColumns() );
 					}
 				}
+
 				if(interestingColumns.size() == 1) {
 					// collection of primitives
 					Column column = interestingColumns.get( 0 );
@@ -169,10 +172,48 @@ public class CassandraSchemaDefiner extends BaseSchemaDefiner {
 					cqlType = "list<"+cqlType+">";
 					columnNames.add( column.getName() );
 					columnTypes.add( cqlType );
+					inlinedTable = new InlinedTable( table );
 				} else {
-					// complex type required
-					//throw new RuntimeException( "UDT collection not suported yet" );
+
+					List<String> childColumnNames = new ArrayList<String>();
+					List<String> childColumnTypes = new ArrayList<String>();
+
+					for(Column column : interestingColumns) {
+						childColumnNames.add( column.getName() );
+
+						Value value = column.getValue();
+						Type type = value.getType();
+
+						if ( type.isAssociationType() ) {
+							type = type.getSemiResolvedType( sessionFactoryImplementor );
+							if ( type.isComponentType() ) {
+								int index = column.getTypeIndex();
+								type = ((org.hibernate.type.ComponentType) type).getSubtypes()[index];
+							}
+						}
+						else if ( type.isComponentType() ) {
+							int index = column.getTypeIndex();
+							type = ((org.hibernate.type.ComponentType) column.getValue().getType()).getSubtypes()[index];
+						}
+
+						GridType gridType = typeTranslator.getType( type );
+						String cqlType = CassandraTypeMapper.INSTANCE.hibernateToCQL( gridType );
+						childColumnTypes.add( cqlType );
+					}
+
+					UserType userType = datastoreProvider.createUDTIfNeeded(
+							childTable.getName(),
+							childColumnNames,
+							childColumnTypes
+					);
+
+					String udtColumnName = childTable.getName().replace( table.getName() + "_", "" );
+					columnNames.add( udtColumnName );
+					columnTypes.add( "list<frozen<\""+ childTable.getName() +"\">>" );
+					inlinedTable = new InlinedTable( table, userType, udtColumnName );
 				}
+
+				datastoreProvider.setInlinedCollection( childTable.getName(), inlinedTable );
 			}
 		}
 

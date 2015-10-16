@@ -6,9 +6,11 @@
  */
 package org.hibernate.ogm.datastore.cassandra;
 
+import static com.datastax.driver.core.querybuilder.QueryBuilder.append;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.appendAll;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.delete;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.eq;
+import static com.datastax.driver.core.querybuilder.QueryBuilder.in;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.insertInto;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.select;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.update;
@@ -31,6 +33,7 @@ import org.hibernate.mapping.Column;
 import org.hibernate.mapping.Table;
 import org.hibernate.ogm.datastore.cassandra.impl.CassandraDatastoreProvider;
 import org.hibernate.ogm.datastore.cassandra.impl.CassandraTypeMapper;
+import org.hibernate.ogm.datastore.cassandra.impl.InlinedTable;
 import org.hibernate.ogm.datastore.cassandra.logging.impl.Log;
 import org.hibernate.ogm.datastore.cassandra.logging.impl.LoggerFactory;
 import org.hibernate.ogm.datastore.map.impl.MapAssociationSnapshot;
@@ -65,6 +68,8 @@ import com.datastax.driver.core.RegularStatement;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Session;
+import com.datastax.driver.core.UDTValue;
+import com.datastax.driver.core.UserType;
 import com.datastax.driver.core.exceptions.DriverException;
 import com.datastax.driver.core.querybuilder.Delete;
 import com.datastax.driver.core.querybuilder.Insert;
@@ -121,7 +126,7 @@ public class CassandraDialect implements GridDialect {
 
 	// temporary, as equivalent in java-driver's Querybuilder is broken.
 	// https://datastax-oss.atlassian.net/browse/JAVA-712
-	private static String quote(String columnName) {
+	public static String quote(String columnName) {
 		StringBuilder sb = new StringBuilder();
 		sb.append( '"' );
 		sb.append( columnName );
@@ -237,24 +242,26 @@ public class CassandraDialect implements GridDialect {
 	}
 
 	public Association getInlinedAssociation(AssociationKey key, AssociationContext associationContext,
-											 Table actualTableMetadata, Table assumedTableMetadata) {
+											 InlinedTable inlinedTable, Table assumedTableMetadata) {
 
-		// the association would normally be in its own table (assumedTable), but we've inlined it as a
-		// native collection column on the parent table (actualTable), so we must rewrite the query accordingly
+		// the association would normally be in its own table (assumedTableMetadata), but we've inlined it as a
+		// native collection column on the parent table (inlinedTable), so we must rewrite the query accordingly
+
+		Table table = inlinedTable.getTable();
 
 		Select.Selection selection = select()
-				.column( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) )
-				.as( quote( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) ) );
+				.column( key.getTable().replace( table.getName() + "_", "" ) )
+				.as( quote( key.getTable().replace( table.getName() + "_", "" ) ) );
 
-		List<Column> tablePKCols= actualTableMetadata.getPrimaryKey().getColumns();
+		List<Column> tablePKCols= table.getPrimaryKey().getColumns();
 
 		for ( int i = 0; i < key.getColumnNames().length; i++ ) {
 			selection = selection
 					.column( quote( tablePKCols.get( i ).getName() ) )
-					.as( quote( actualTableMetadata.getName() + "_" + tablePKCols.get( i ).getName() ) );
+					.as( quote( table.getName() + "_" + tablePKCols.get( i ).getName() ) );
 		}
 
-		Select select = selection.from( quote( actualTableMetadata.getName() ) );
+		Select select = selection.from( quote( table.getName() ) );
 		Select.Where selectWhere = select.where(
 				eq(
 						quote( tablePKCols.get( 0 ).getName() ),
@@ -303,11 +310,10 @@ public class CassandraDialect implements GridDialect {
 			rowKeyColumnNamesList.add( iter.next().getName() );
 		}
 		String[] columnNames = rowKeyColumnNamesList.toArray( new String[rowKeyColumnNamesList.size()] );
-		String collectionColumn = key.getTable().replace( actualTableMetadata.getName() + "_", "" );
+		String collectionColumn = key.getTable().replace( table.getName() + "_", "" );
 
 		for ( Row row : resultSet ) {
 
-			// TODO unroll collection
 			Map<String, Object> rowMap = tupleFromRow( row );
 			List<?> list = (List<?>) rowMap.get( collectionColumn );
 			if(list == null) {
@@ -317,7 +323,20 @@ public class CassandraDialect implements GridDialect {
 
 				Map<String, Object> unrolledMap = new HashMap<>();
 				unrolledMap.putAll( rowMap );
-				unrolledMap.put( collectionColumn, o );
+				if(o instanceof UDTValue) {
+					UDTValue udtValue = (UDTValue)o;
+					for(String fieldName : udtValue.getType().getFieldNames()) {
+						ByteBuffer byteBuffer = udtValue.getBytesUnsafe( fieldName );
+						DataType dataType = udtValue.getType().getFieldType( fieldName );
+						Object value = null;
+						if ( byteBuffer != null ) {
+							value = dataType.deserialize( byteBuffer, protocolVersion );
+							unrolledMap.put( fieldName, value );
+						}
+					}
+				} else {
+					unrolledMap.put( collectionColumn, o );
+				}
 				Object[] resultColumnValues = new Object[columnNames.length];
 				for ( int i = 0; i < columnNames.length; i++ ) {
 					resultColumnValues[i] = unrolledMap.get( columnNames[i] );
@@ -337,7 +356,7 @@ public class CassandraDialect implements GridDialect {
 	@Override
 	public Association getAssociation(AssociationKey key, AssociationContext associationContext) {
 
-		Table actualTableMetadata = provider.getInlinedCollections().get( key.getTable() );
+		InlinedTable actualTableMetadata = provider.getInlinedCollections().get( key.getTable() );
 		Table assumedTableMetadata = provider.getMetaDataCache().get( key.getTable() );
 
 		if ( actualTableMetadata != null) {
@@ -420,7 +439,7 @@ public class CassandraDialect implements GridDialect {
 			AssociationKey key,
 			Association association,
 			AssociationContext associationContext,
-			Table actualTableMetadata,
+			InlinedTable inlinedTable,
 			Table assumedTableMetadata
 	) {
 
@@ -450,25 +469,51 @@ public class CassandraDialect implements GridDialect {
 
 		for ( AssociationOperation op : updateOps ) {
 
+			Table table = inlinedTable.getTable();
 			Tuple value = op.getValue();
 			List<Object> columnValues = new ArrayList<>();
-			Update.Assignments assignments = update( quote( actualTableMetadata.getName() ) )
+			Update.Assignments assignments = update( quote( table.getName() ) )
 					.with();
 
-			List<Column> tablePKCols = actualTableMetadata.getPrimaryKey().getColumns();
+			List<Column> tablePKCols = table.getPrimaryKey().getColumns();
 			Set<String> nonValueColumnNames = new HashSet<>();
 			for(Column column : tablePKCols) {
-				nonValueColumnNames.add( actualTableMetadata.getName() + "_"+column.getName() );
+				nonValueColumnNames.add( table.getName() + "_"+column.getName() );
 			}
 
-			for ( String columnName : value.getColumnNames() ) {
-				if(!nonValueColumnNames.contains( columnName )) {
-					assignments = assignments.and( appendAll(
-														   quote( columnName ),
-														   QueryBuilder.bindMarker( columnName )
-												   ) );
-					columnValues.add( Arrays.asList( op.getValue().get( columnName ) ) );
+			UserType userType = inlinedTable.getUserType();
+			if(userType == null) {
+				for ( String columnName : value.getColumnNames() ) {
+					if(!nonValueColumnNames.contains( columnName )) {
+						assignments = assignments.and( appendAll(
+															   quote( columnName ),
+															   QueryBuilder.bindMarker( columnName )
+													   ) );
+						columnValues.add( Arrays.asList( op.getValue().get( columnName ) ) );
+					}
 				}
+			} else {
+
+				UDTValue udtValue = userType.newValue();
+				for ( String columnName : value.getColumnNames() ) {
+					if ( !nonValueColumnNames.contains( columnName ) ) {
+						DataType dataType = userType.getFieldType( columnName );
+						Object colValue = op.getValue().get( columnName );
+						if(colValue != null) {
+							udtValue.setBytesUnsafe(
+									columnName, dataType.serialize(
+											op.getValue().get( columnName ),
+											protocolVersion
+									)
+							);
+						}
+					}
+				}
+				assignments = assignments.and( appendAll(
+													   quote( inlinedTable.getUdtColumnName() ),
+													   QueryBuilder.bindMarker()
+											   ) );
+				columnValues.add( Arrays.asList( udtValue ) );
 			}
 
 			Update.Where updateWhere = assignments.where(
@@ -477,19 +522,16 @@ public class CassandraDialect implements GridDialect {
 							QueryBuilder.bindMarker()
 					)
 			);
-			columnValues.add( op.getValue().get( actualTableMetadata.getName() + "_"+tablePKCols.get( 0 ).getName() ) );
+			columnValues.add( op.getValue().get( table.getName() + "_"+tablePKCols.get( 0 ).getName() ) );
 			for ( int i = 1; i < key.getColumnNames().length; i++ ) {
 				updateWhere = updateWhere.and( eq( quote( tablePKCols.get( i ).getName() ), QueryBuilder.bindMarker() ) );
-				columnValues.add( op.getValue().get( actualTableMetadata.getName() + "_"+tablePKCols.get( i ).getName() ) );
+				columnValues.add( op.getValue().get( table.getName() + "_"+tablePKCols.get( i ).getName() ) );
 			}
 
-			System.out.println(updateOps.size());
 			bindAndExecute( columnValues.toArray(), updateWhere );
 		}
 
 		for ( AssociationOperation op : deleteOps ) {
-
-			System.out.println(deleteOps.size());
 
 //			RowKey value = op.getKey();
 //			Delete.Selection deleteSelection = delete();
@@ -522,11 +564,11 @@ public class CassandraDialect implements GridDialect {
 			return;
 		}
 
-		Table actualTableMetadata = provider.getInlinedCollections().get( key.getTable() );
+		InlinedTable inlinedTable = provider.getInlinedCollections().get( key.getTable() );
 		Table assumedTableMetadata = provider.getMetaDataCache().get( key.getTable() );
-		if(actualTableMetadata != null) {
+		if(inlinedTable != null) {
 			insertOrUpdateInlinedAssociation(key, association, associationContext,
-											 actualTableMetadata, assumedTableMetadata);
+											 inlinedTable, assumedTableMetadata);
 			return;
 		}
 
@@ -595,13 +637,15 @@ public class CassandraDialect implements GridDialect {
 	}
 
 	public void removeInlinedAssociation(AssociationKey key, AssociationContext associationContext,
-								  Table actualTableMetadata, Table assumedTableMetadata) {
-		// TODO
-		Delete delete = delete()
-				.column( key.getTable().replace( actualTableMetadata.getName() + "_", "" ) )
-				.from( quote( actualTableMetadata.getName() ) );
+										 InlinedTable inlinedTable, Table assumedTableMetadata) {
 
-		List<Column> tablePKCols = actualTableMetadata.getPrimaryKey().getColumns();
+		Table table = inlinedTable.getTable();
+
+		Delete delete = delete()
+				.column( key.getTable().replace( table.getName() + "_", "" ) )
+				.from( quote( table.getName() ) );
+
+		List<Column> tablePKCols = table.getPrimaryKey().getColumns();
 
 		Delete.Where deleteWhere = delete.where(
 				eq(
@@ -623,11 +667,11 @@ public class CassandraDialect implements GridDialect {
 			return;
 		}
 
-		Table actualTableMetadata = provider.getInlinedCollections().get( key.getTable() );
+		InlinedTable inlinedTable = provider.getInlinedCollections().get( key.getTable() );
 		Table assumedTableMetadata = provider.getMetaDataCache().get( key.getTable() );
-		if(actualTableMetadata != null) {
+		if(inlinedTable != null) {
 			removeInlinedAssociation(key, associationContext,
-											 actualTableMetadata, assumedTableMetadata);
+									 inlinedTable, assumedTableMetadata);
 			return;
 		}
 
