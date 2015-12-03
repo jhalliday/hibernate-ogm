@@ -29,7 +29,7 @@
         <fongodbVersion>2.0.2</fongodbVersion>
         <neo4jVersion>2.2.3</neo4jVersion>
         <!-- Update dependency versions accordingly when updating C*  -->
-        <cassandraVersion>2.2.0-rc2</cassandraVersion>
+        <cassandraVersion>2.2.0-rc3</cassandraVersion>
         <!-- Update dependency versions accordingly when updating lettuce  -->
         <lettuceVersion>3.2.Final</lettuceVersion>
         <!-- Neo4j supports different versions of Cypher -->
